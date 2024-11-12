@@ -1,0 +1,134 @@
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-storage:/var/lib/grafana
+
+  consul:
+    image: consul:1.9.5
+    ports:
+      - "8500:8500"
+    command: "consul agent -dev -client=0.0.0.0"
+
+  api-gateway:
+    container_name: api-gateway
+    build:
+      context: ./api-gateway
+    ports:
+      - "8000:8000"
+    depends_on:
+      - push-service
+      - customer-service
+      - redis
+      - consul
+    env_file:
+      - ./api-gateway/.env.production
+
+  push-service:
+    container_name: push-service
+    build:
+      context: ./push-service
+    ports:
+      - "8001:8001"
+    depends_on:
+      - db
+      - rabbitmq
+      - consul
+    env_file:
+      - ./push-service/.env.production
+    
+  # Celery worker for push-service
+  push-celery-worker:
+    container_name: push-celery-worker
+    build:
+      context: ./push-service  # Assumes the Celery worker is part of the push-service
+    command: celery -A app.core.celery.celery_app worker --loglevel=info
+    depends_on:
+      - rabbitmq
+      - redis
+      - push-service
+    env_file:
+      - ./push-service/.env.production
+
+  # Flower for monitoring Celery
+  flower:
+    container_name: flower
+    build:
+      context: ./push-service 
+    image: mher/flower
+    ports:
+      - "5555:5555"
+    command: celery -A app.core.celery.celery_app flower --port=5555
+    depends_on:
+      - push-celery-worker
+    environment:
+      - FLOWER_BASIC_AUTH=admin:admin  # Set your credentials for Flower
+
+  customer-service:
+    container_name: customer-service
+    build:
+      context: ./customer-service
+    ports:
+      - "8002:8002"
+    depends_on:
+      - db
+      - rabbitmq
+      - consul
+    env_file:
+      - ./customer-service/.env.production
+
+  media-service:
+    container_name: media-service
+    build:
+      context: ./media-service
+    ports:
+      - "8003:8003"
+    depends_on:
+      - db
+      - rabbitmq
+      - consul
+    env_file:
+      - ./media-service/.env.production
+    
+  db:
+    container_name: db
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=test
+    ports:
+      - "2245:5432"
+
+  redis:
+    container_name: redis
+    image: redis:latest
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    container_name: rabbitmq
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+volumes:
+  postgres_data:
+  grafana-storage:
+
